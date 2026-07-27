@@ -10,6 +10,12 @@
 #include "Playerbots.h"
 #include "Unit.h"
 
+static bool IsAttacker(PlayerbotAI* botAI, Unit* target)
+{
+    GuidVector attackers = botAI->GetAiObjectContext()->GetValue<GuidVector>("attackers")->Get();
+    return std::find(attackers.begin(), attackers.end(), target->GetGUID()) != attackers.end();
+}
+
 bool InvalidTargetValue::Calculate()
 {
     Unit* target = AI_VALUE(Unit*, qualifier);
@@ -21,7 +27,8 @@ bool InvalidTargetValue::Calculate()
     {
         return target->GetMapId() != bot->GetMapId() || target->HasUnitFlag(UNIT_FLAG_NOT_SELECTABLE) ||
                target->HasUnitFlag(UNIT_FLAG_NON_ATTACKABLE) || target->HasUnitFlag(UNIT_FLAG_NON_ATTACKABLE_2) ||
-               !target->IsVisible() || !target->IsAlive() || target->IsPolymorphed() || target->IsCharmed() ||
+               !target->IsVisible() || !target->IsAlive() ||
+               (target->IsPolymorphed() && !IsAttacker(botAI, target)) || target->IsCharmed() ||
                target->HasFearAura() || target->HasUnitState(UNIT_STATE_ISOLATED) || target->IsFriendlyTo(bot) ||
                !AttackersValue::IsValidTarget(target, bot);
     }

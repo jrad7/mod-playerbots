@@ -44,6 +44,18 @@ GuidVector AttackersValue::Calculate()
             targets.insert(skullTarget);
     }
 
+    Group* party = bot->GetGroup();
+    if (targets.empty() && party && !party->isRaidGroup())
+    {
+        std::unordered_set<Unit*> crowdControlled;
+        AddAttackersOf(bot, crowdControlled);
+        AddAttackersOf(party, crowdControlled);
+
+        for (Unit* unit : crowdControlled)
+            if (unit->IsPolymorphed() && bot->GetMapId() == unit->GetMapId() && IsValidTarget(unit, bot))
+                targets.insert(unit);
+    }
+
     for (Unit* unit : targets)
         result.push_back(unit->GetGUID());
 
