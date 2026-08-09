@@ -383,6 +383,7 @@ public:
     bool enableTravelNodes;
     uint32 travelNodeRoadIdBase;
     float travelNodeOffRoadCostMultiplier;
+    uint32 travelNodeMaxAStarNodes;
     std::unordered_map<NewRpgStatus, uint32> RpgStatusProbWeight;
     bool syncLevelWithPlayers;
     bool autoLearnQuestSpells;

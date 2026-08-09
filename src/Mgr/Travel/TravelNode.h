@@ -383,18 +383,21 @@ public:
     std::vector<TravelNode*> getNodeMap(bool importantOnly = false,
         std::vector<TravelNode*> ignoreNodes = {});
 
-    // Checks if it is even possible to route to this node.
+    // Checks if it is even possible to route to this node. Every node carries
+    // the id of its connected component (assigned by PrecomputeReachability),
+    // so this is a comparison rather than a per-node reachability set: at
+    // 15k nodes the set form costs ~200M entries / several GB.
+    // Component 0 means "not indexed yet", which cannot rule anything out.
     bool hasRouteTo(TravelNode* node)
     {
-        if (routes.empty())
-            for (auto mNode : getNodeMap())
-                routes[mNode] = true;
+        if (!componentId || !node->componentId)
+            return true;
 
-        return routes.find(node) != routes.end();
+        return componentId == node->componentId;
     }
 
-    void clearRoutes() { routes.clear(); }
-    void setRouteTo(TravelNode* node) { routes[node] = true; }
+    void setComponentId(uint32 componentId1) { componentId = componentId1; }
+    uint32 getComponentId() const { return componentId; }
 
     void print(bool printFailed = true);
 
@@ -409,8 +412,8 @@ protected:
     // List of links to other nodes.
     std::unordered_map<TravelNode*, TravelNodePath*> links;
 
-    // List of nodes and if there is 'any' route possible
-    std::unordered_map<TravelNode*, bool> routes;
+    // 1-based id of the connected component this node belongs to, 0 = unindexed.
+    uint32 componentId = 0;
 
     // This node should not be removed
     bool important = false;

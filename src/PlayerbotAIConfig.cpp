@@ -708,6 +708,7 @@ bool PlayerbotAIConfig::Initialize()
         sConfigMgr->GetOption<float>("AiPlayerbot.TravelNodeOffRoadCostMultiplier", 1.5f);
     if (travelNodeOffRoadCostMultiplier < 1.0f)
         travelNodeOffRoadCostMultiplier = 1.0f;
+    travelNodeMaxAStarNodes = sConfigMgr->GetOption<uint32>("AiPlayerbot.TravelNodeMaxAStarNodes", 20000);
 
     RpgStatusProbWeight[RPG_WANDER_RANDOM] = sConfigMgr->GetOption<int32>("AiPlayerbot.RpgStatusProbWeight.WanderRandom", 15);
     RpgStatusProbWeight[RPG_WANDER_NPC] = sConfigMgr->GetOption<int32>("AiPlayerbot.RpgStatusProbWeight.WanderNpc", 20);

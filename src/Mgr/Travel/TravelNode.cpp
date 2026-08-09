@@ -6,6 +6,7 @@
 
 #include "TravelNode.h"
 
+#include <algorithm>
 #include <array>
 #include <iomanip>
 #include <queue>
@@ -1103,13 +1104,21 @@ TravelNodeRoute TravelNodeMap::GetNodeRoute(TravelNode* start, TravelNode* goal,
     std::push_heap(open.begin(), open.end(), heapComp);
     startStub->open = true;
 
-    constexpr uint32 MAX_A_STAR_EXPLORED = 500;
+    // Expansion budget. 500 was sized for the 3.8k-node legacy seed; the road
+    // graph adds 11.6k junctions, and a cross-zone route on a dense continent
+    // expands well past that before it reaches the goal — every one of those
+    // would silently come back "unroutable" and fall through to a teleport.
+    uint32 const maxExplored = sPlayerbotAIConfig.travelNodeMaxAStarNodes;
     uint32 nodesExplored = 0;
 
     while (!open.empty())
     {
-        if (++nodesExplored > MAX_A_STAR_EXPLORED)
+        if (++nodesExplored > maxExplored)
+        {
+            LOG_DEBUG("playerbots", "Travel node A* gave up after {} expansions ({} -> {}).", maxExplored,
+                      start->getName(), goal->getName());
             return TravelNodeRoute();
+        }
 
         std::pop_heap(open.begin(), open.end(), heapComp);
         currentNode = open.back();
@@ -2137,9 +2146,16 @@ void TravelNodeMap::LoadNodeStore()
             {
                 Field* fields = result->Fetch();
 
+                // checkDuplicate = false: the stored rows are the graph. Each
+                // row must become exactly one node or the id -> node mapping
+                // stops being a bijection, which the connector verification and
+                // the road id range both depend on. The check also costs a scan
+                // of every node already loaded, per row — 15k rows makes that
+                // ~119M distance tests for the sake of merging 60 nodes that
+                // happen to sit within 5 yd of each other.
                 TravelNode* node = addNode(WorldPosition(fields[2].Get<uint32>(), fields[3].Get<float>(),
                                                          fields[4].Get<float>(), fields[5].Get<float>()),
-                                           fields[1].Get<std::string>(), true);
+                                           fields[1].Get<std::string>(), true, false);
 
                 if (fields[6].Get<bool>())
                     node->setLinked(true);
@@ -2571,15 +2587,20 @@ void TravelNodeMap::PrecomputeReachability()
         components.push_back(std::move(component));
     }
 
-    // Populate routes: every node in a component can reach every other node
-    // in the same component
+    // Stamp each node with its component id. Two nodes can reach each other
+    // exactly when the ids match, which replaces the former node-by-node
+    // reachability sets (quadratic: ~213M entries / ~8.5 GB once the road
+    // graph's 11.6k nodes join the 3.8k legacy ones).
+    uint32 componentId = 0;
+    size_t largest = 0;
     for (auto const& comp : components)
     {
+        ++componentId;
+        largest = std::max(largest, comp.size());
         for (auto* node : comp)
-        {
-            node->clearRoutes();
-            for (auto* other : comp)
-                node->setRouteTo(other);
-        }
+            node->setComponentId(componentId);
     }
+
+    LOG_INFO("playerbots", ">> Travel node graph: {} nodes in {} connected components (largest {}).", nodes.size(),
+             components.size(), largest);
 }

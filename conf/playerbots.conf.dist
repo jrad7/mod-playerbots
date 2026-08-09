@@ -1077,6 +1077,13 @@ AiPlayerbot.TravelNodeRoadIdBase = 100000
 # Default: 1.5
 AiPlayerbot.TravelNodeOffRoadCostMultiplier = 1.5
 
+# Node expansions the travel-node A* may spend on one route before giving up.
+# Giving up means "no plan", which the RPG movement code answers with a teleport,
+# so a budget sized for the legacy seed alone turns long routes into teleports
+# once the road graph's 11.6k extra junctions are loaded.
+# Default: 20000
+AiPlayerbot.TravelNodeMaxAStarNodes = 20000
+
 # Control probability weights for RPG status of bots. Takes effect only when the status meets its premise.​
 # Sum of weights need not be 100. Set to 0 to disable the status.
 #
