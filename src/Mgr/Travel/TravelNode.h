@@ -134,6 +134,7 @@ public:
         swimDistance = basePath->swimDistance;
         pathType = basePath->pathType;
         pathObject = basePath->pathObject;
+        road = basePath->road;
     }
 
     // Getters
@@ -151,6 +152,11 @@ public:
     void setCalculated(bool calculated1 = true) { calculated = calculated1; }
 
     bool getCalculated() { return calculated; }
+
+    // Does this link follow an extracted road? Set at load time from the
+    // destination node's id (road nodes live in a reserved id range).
+    void setRoad(bool road1 = true) { road = road1; }
+    bool isRoad() const { return road; }
 
     std::string const print();
 
@@ -199,6 +205,9 @@ private:
     TravelNodePathType pathType = TravelNodePathType::walk;
     uint32 pathObject = 0;
 
+    // Walking this link means walking a road.
+    bool road = false;
+
     /*
     //Is the path a portal/teleport to the destination?
     bool portal = false;
@@ -239,9 +248,14 @@ public:
     // Setters
     void setLinked(bool linked1) { linked = linked1; }
     void setPoint(WorldPosition point1) { point = point1; }
+    void setDbId(uint32 dbId1) { dbId = dbId1; }
 
     // Getters
     std::string const getName() { return nodeName; }
+    // Row id this node was loaded from, 0 for nodes created at runtime.
+    uint32 getDbId() { return dbId; }
+    // Road nodes are emitted into a reserved id range above the legacy seed.
+    bool isRoadNode();
     WorldPosition* getPosition() { return &point; }
     std::unordered_map<TravelNode*, TravelNodePath>* getPaths() { return &paths; }
     std::unordered_map<TravelNode*, TravelNodePath*>* getLinks() { return &links; }
@@ -403,6 +417,9 @@ protected:
 
     // This node has been checked for nearby links
     bool linked = false;
+
+    // playerbots_travelnode.id this node was loaded from.
+    uint32 dbId = 0;
 
     // This node is a (moving) transport.
     // bool transport = false;
@@ -713,6 +730,12 @@ public:
     std::vector<G3D::Vector3> GetEdgeWalkPoints(TravelNode* from,
         TravelNode* to);
 
+    // True once LoadNodeStore() has seen at least one node in the road id
+    // range. The off-road cost multiplier is inert without it, so a server
+    // running only the legacy seed keeps stock routing.
+    bool hasRoadData() const { return roadNodeCount > 0; }
+    uint32 getRoadNodeCount() const { return roadNodeCount; }
+
     std::shared_timed_mutex m_nMapMtx;
 
 private:
@@ -747,6 +770,8 @@ private:
     bool hasToSave = false;
     bool hasToGen = false;
     bool hasToFullGen = false;
+
+    uint32 roadNodeCount = 0;
 };
 
 #define sTravelNodeMap TravelNodeMap::instance()

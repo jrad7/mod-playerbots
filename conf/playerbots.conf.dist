@@ -1059,6 +1059,24 @@ AiPlayerbot.EnableNewRpgStrategy = 1
 # Default: 0 (disabled)
 AiPlayerbot.EnableTravelNodes = 0
 
+# First playerbots_travelnode.id belonging to the extracted road graph. Rows at
+# or above this id are road junctions/anchors; below it is the legacy POI seed.
+# Only meaningful when the road SQL has been loaded. 0 disables road awareness.
+# Default: 100000
+AiPlayerbot.TravelNodeRoadIdBase = 100000
+
+# Cost multiplier applied to walking links that do NOT lead onto the road graph.
+# Roads are only preferred if leaving them costs something: at 1.0 the router
+# picks the legacy cross-country beeline even when a road route is barely longer.
+# Measured offline over 40 town-to-town routes per continent: 1.5 roughly doubles
+# road usage on the weakest continents (Eastern Kingdoms 24%->62%, Northrend
+# 19%->32%) with nothing becoming unroutable and no net detour; above 2.0 the
+# router starts taking real detours to stay on tarmac. Note that raising this
+# also makes flight paths relatively cheaper than long walks.
+# Has no effect unless road nodes are loaded. Values below 1.0 are clamped.
+# Default: 1.5
+AiPlayerbot.TravelNodeOffRoadCostMultiplier = 1.5
+
 # Control probability weights for RPG status of bots. Takes effect only when the status meets its premise.​
 # Sum of weights need not be 100. Set to 0 to disable the status.
 #

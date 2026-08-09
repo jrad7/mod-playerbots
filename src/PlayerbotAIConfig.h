@@ -381,6 +381,8 @@ public:
     bool autoDoQuests;
     bool enableNewRpgStrategy;
     bool enableTravelNodes;
+    uint32 travelNodeRoadIdBase;
+    float travelNodeOffRoadCostMultiplier;
     std::unordered_map<NewRpgStatus, uint32> RpgStatusProbWeight;
     bool syncLevelWithPlayers;
     bool autoLearnQuestSpells;

@@ -181,7 +181,22 @@ float TravelNodePath::getCost(Player* bot, uint32 cGold)
     else
         timeCost = (runDistance / speed + swimDistance / swimSpeed) * modifier;
 
+    // Roads are only preferred if leaving them costs something. Walking a link
+    // that does not lead onto the road graph is charged a configurable premium;
+    // see AiPlayerbot.TravelNodeOffRoadCostMultiplier. Inert unless road nodes
+    // are loaded, so a legacy-only node store routes exactly as before.
+    if (getPathType() == TravelNodePathType::walk && !road &&
+        sPlayerbotAIConfig.travelNodeOffRoadCostMultiplier > 1.0f &&
+        TravelNodeMap::instance().hasRoadData())
+        timeCost *= sPlayerbotAIConfig.travelNodeOffRoadCostMultiplier;
+
     return timeCost;
+}
+
+bool TravelNode::isRoadNode()
+{
+    uint32 const base = sPlayerbotAIConfig.travelNodeRoadIdBase;
+    return base && dbId >= base;
 }
 
 uint32 TravelNodePath::getPrice()
@@ -1969,6 +1984,21 @@ void TravelNodeMap::saveNodeStore()
     if (!hasToSave)
         return;
 
+    // Saving rewrites all three tables and renumbers every node to its array
+    // index, which would collapse the road id range back into the legacy one
+    // and silently disable road preference. Refuse rather than destroy the
+    // extracted graph; drop the road rows (or set TravelNodeRoadIdBase to 0)
+    // first if a regeneration really is intended.
+    if (roadNodeCount)
+    {
+        hasToSave = false;
+        LOG_ERROR("playerbots",
+                  ">> Refusing to save the travel node store: {} road nodes are loaded and saving renumbers every "
+                  "id, destroying the road id range ({}+). Re-apply the road SQL after any deliberate regeneration.",
+                  roadNodeCount, sPlayerbotAIConfig.travelNodeRoadIdBase);
+        return;
+    }
+
     hasToSave = false;
 
     PlayerbotsDatabaseTransaction trans = PlayerbotsDatabase.BeginTransaction();
@@ -1997,6 +2027,7 @@ void TravelNodeMap::saveNodeStore()
         stmt->SetData(6, node->isLinked());
         trans->Append(stmt);
 
+        node->setDbId(i);
         saveNodes.insert(std::make_pair(node, i));
     }
 
@@ -2096,6 +2127,8 @@ void TravelNodeMap::LoadNodeStore()
 
     std::unordered_map<uint32, TravelNode*> saveNodes;
 
+    roadNodeCount = 0;
+
     {
         if (PreparedQueryResult result =
                 PlayerbotsDatabase.Query(PlayerbotsDatabase.GetPreparedStatement(PLAYERBOTS_SEL_TRAVELNODE)))
@@ -2113,11 +2146,16 @@ void TravelNodeMap::LoadNodeStore()
                 else
                     hasToGen = true;
 
-                saveNodes.insert(std::make_pair(fields[0].Get<uint32>(), node));
+                uint32 const nodeId = fields[0].Get<uint32>();
+                node->setDbId(nodeId);
+                if (node->isRoadNode())
+                    ++roadNodeCount;
+
+                saveNodes.insert(std::make_pair(nodeId, node));
 
             } while (result->NextRow());
 
-            LOG_INFO("playerbots", ">> Loaded {} travelNodes.", saveNodes.size());
+            LOG_INFO("playerbots", ">> Loaded {} travelNodes ({} road).", saveNodes.size(), roadNodeCount);
         }
         else
         {
@@ -2143,13 +2181,21 @@ void TravelNodeMap::LoadNodeStore()
                 TravelNode* startNode = startIt->second;
                 TravelNode* endNode = endIt->second;
 
-                startNode->setPathTo(
+                TravelNodePath* nodePath = startNode->setPathTo(
                     endNode,
                     TravelNodePath(fields[4].Get<float>(), fields[6].Get<float>(), fields[2].Get<uint8>(),
                                    fields[3].Get<uint64>(), fields[7].Get<bool>(),
                                    {fields[8].Get<uint8>(), fields[9].Get<uint8>(), fields[10].Get<uint8>()},
                                    fields[5].Get<float>()),
                     true);
+
+                // A link counts as road when it *arrives* on the road graph.
+                // On-ramps (legacy -> road) are therefore cheap and off-ramps
+                // (road -> legacy) pay the premium: cheap to get on the road,
+                // costly to leave it. This is the asymmetry the offline A*
+                // sweep in phase-3-integration-report.md measured.
+                if (nodePath && endNode->isRoadNode())
+                    nodePath->setRoad(true);
 
                 if (!fields[7].Get<bool>())
                     hasToGen = true;
