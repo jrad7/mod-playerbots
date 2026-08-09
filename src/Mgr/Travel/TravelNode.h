@@ -651,6 +651,12 @@ struct TravelPlan
     // Taxi scratch:
     std::vector<uint32> route;
 
+    // What the router meant to walk when it built this plan. Kept per-plan and
+    // not just in the global telemetry so a watcher can tell a bot the graph
+    // deliberately routed cross-country from one that is off its plan entirely.
+    uint32 plannedWalkYards{0};
+    uint32 plannedRoadYards{0};
+
     bool IsActive() const { return !steps.empty(); }
 
     void Reset()
@@ -663,6 +669,8 @@ struct TravelPlan
         splineStartTime = 0;
         expectedDuration = 0;
         route.clear();
+        plannedWalkYards = 0;
+        plannedRoadYards = 0;
     }
 };
 

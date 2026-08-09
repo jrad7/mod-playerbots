@@ -555,6 +555,30 @@ public:
     bool HasPlayerNearby(float range = sPlayerbotAIConfig.reactDistance);
     bool AllowActive(ActivityType activityType);
     bool AllowActivity(ActivityType activityType = ALL_ACTIVITY, bool checkNow = false);
+
+    // Pin this bot fully active for a while, whoever is or is not standing near
+    // it. Without this, a bot away from a real player is denied
+    // DETAILED_MOVE_ACTIVITY outright — the random-rotation path explicitly
+    // refuses it — so it can be given a destination and simply never walk.
+    // Scripted demos and tests need the bot to behave as if observed.
+    // Duration 0 clears the override.
+    void ForceActiveFor(uint32 durationMs)
+    {
+        forceActiveStartedAt = getMSTime();
+        forceActiveDurationMs = durationMs;
+    }
+    bool IsForcedActive() const
+    {
+        return forceActiveDurationMs && GetMSTimeDiffToNow(forceActiveStartedAt) < forceActiveDurationMs;
+    }
+
+    // Every RPG action opens by looking for a quest giver within 80 yards and
+    // walking to it, which is the right instinct for a bot living its life and
+    // fatal for one that was sent somewhere: dropped in a town it never gets
+    // past the first row of NPCs. Set while a script is watching the bot walk.
+    void SuppressRpgQuestDetour(bool suppress) { rpgQuestDetourSuppressed = suppress; }
+    bool IsRpgQuestDetourSuppressed() const { return rpgQuestDetourSuppressed; }
+
     uint32 AutoScaleActivity(uint32 mod);
 
     // Check if player is safe to use.
@@ -649,6 +673,9 @@ protected:
     std::pair<ChatMsg, time_t> currentChat;
     static std::set<std::string> unsecuredCommands;
     bool allowActive[MAX_ACTIVITY_TYPE];
+    uint32 forceActiveStartedAt = 0;
+    uint32 forceActiveDurationMs = 0;
+    bool rpgQuestDetourSuppressed = false;
     time_t allowActiveCheckTimer[MAX_ACTIVITY_TYPE];
     bool inCombat = false;
     BotCheatMask cheatMask = BotCheatMask::none;

@@ -1336,8 +1336,12 @@ bool TravelNodeMap::GetFullPath(TravelPlan& plan,
             continue;
 
         telemetry.plannedWalkYards += static_cast<uint64>(path->getDistance());
+        plan.plannedWalkYards += static_cast<uint32>(path->getDistance());
         if (prev->isRoadNode() && next->isRoadNode())
+        {
             telemetry.plannedRoadYards += static_cast<uint64>(path->getDistance());
+            plan.plannedRoadYards += static_cast<uint32>(path->getDistance());
+        }
     }
 
     return true;

@@ -906,6 +906,10 @@ void PlayerbotAI::Reset(bool full)
         aiObjectContext->GetValue<TravelTarget*>("travel target")->Get()->setStatus(TRAVEL_STATUS_EXPIRED);
         aiObjectContext->GetValue<TravelTarget*>("travel target")->Get()->setExpireIn(1000);
         rpgInfo = NewRpgInfo();
+        // Whatever script was watching this bot walk has lost it — a full reset
+        // is a death, a logout or a random-manager teleport. Hand the quest
+        // detour back rather than leaving the bot quietly altered.
+        rpgQuestDetourSuppressed = false;
     }
 
     aiObjectContext->GetValue<GuidSet&>("ignore rpg target")->Get().clear();
@@ -4621,6 +4625,11 @@ bool PlayerbotAI::AllowActive(ActivityType activityType)
 
     // always allow packet handling (e.g. group invites, trade, loot, friend requests etc)
     if (activityType == PACKET_ACTIVITY)
+        return true;
+
+    // pinned active by a script (see ForceActiveFor) — this has to come before
+    // every proximity rule, since the whole point is a bot nobody is watching
+    if (IsForcedActive())
         return true;
 
     // all bots forced active, no rotation or scaling needed

@@ -149,7 +149,7 @@ bool NewRpgStatusUpdateAction::Execute(Event /*event*/)
 
 bool NewRpgGoGrindAction::Execute(Event /*event*/)
 {
-    if (SearchQuestGiverAndAcceptOrReward())
+    if (!botAI->IsRpgQuestDetourSuppressed() && SearchQuestGiverAndAcceptOrReward())
         return true;
     if (auto* data = std::get_if<NewRpgInfo::GoGrind>(&botAI->rpgInfo.data))
     {
