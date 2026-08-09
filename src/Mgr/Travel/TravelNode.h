@@ -7,6 +7,7 @@
 #ifndef PLAYERBOTS_TRAVELNODE_H
 #define PLAYERBOTS_TRAVELNODE_H
 
+#include <atomic>
 #include <shared_mutex>
 
 #include "G3D/Vector3.h"
@@ -164,6 +165,11 @@ public:
     void setComplete(bool complete1) { complete = complete1; }
 
     void setPath(std::vector<WorldPosition> path1) { path = path1; }
+
+    // Append one stored polyline point. Loading a polyline by
+    // get-copy/push_back/set-copy is quadratic in its length, and the seed
+    // averages ~93 points per link across 43k links.
+    void addPathPoint(WorldPosition const& point1) { path.push_back(point1); }
 
     void setPathAndCost(std::vector<WorldPosition> path1, float speed)
     {
@@ -545,6 +551,73 @@ private:
     std::vector<TravelNode*> nodes;
 };
 
+// One measured route: what the live A* picked, and how much of it walks a road.
+// Used by the '.playerbots travel road*' commands to answer the question this
+// whole feature turns on without anyone having to watch a bot for ten minutes.
+struct RoadRouteStats
+{
+    bool routed = false;
+    // Endpoints could not be snapped onto the graph at all.
+    bool snapFailed = false;
+    uint32 nodeCount = 0;
+    // Yards of walking links along the route, and how many of those follow an
+    // extracted road (both endpoints in the road id range).
+    float walkYards = 0.f;
+    float roadYards = 0.f;
+    // Yards covered by non-walking legs (flights, portals, transports).
+    float rideYards = 0.f;
+    uint32 rideLegs = 0;
+    float cost = 0.f;
+    uint32 buildMicros = 0;
+
+    float roadShare() const { return walkYards > 0.f ? 100.f * roadYards / walkYards : 0.f; }
+};
+
+// Running totals for a soak run. The headline question a soak has to answer is
+// "how much of the long-distance walking actually happened on roads, and did
+// bots teleport less than they used to", so both sides are counted here.
+// Yards are the yards a built plan intends to walk, not yards completed.
+struct TravelTelemetry
+{
+    std::atomic<uint32> plansBuilt{0};
+    std::atomic<uint32> plansFailed{0};
+    std::atomic<uint64> plannedWalkYards{0};
+    std::atomic<uint64> plannedRoadYards{0};
+
+    // Teleports, by why the bot gave up walking.
+    std::atomic<uint32> teleportNoPlan{0};
+    std::atomic<uint32> teleportBatchTooFar{0};
+    std::atomic<uint32> teleportPortal{0};
+    std::atomic<uint32> teleportSpell{0};
+    std::atomic<uint32> teleportFlyingMount{0};
+    std::atomic<uint32> teleportOther{0};
+    // The pre-existing 90-second no-progress recovery in MoveFarTo. It fires
+    // with or without travel nodes, so it is the number to compare against a
+    // stock control run.
+    std::atomic<uint32> teleportStuck{0};
+
+    uint32 teleportTotal() const
+    {
+        return teleportNoPlan + teleportBatchTooFar + teleportPortal + teleportSpell + teleportFlyingMount +
+               teleportOther + teleportStuck;
+    }
+
+    void reset()
+    {
+        plansBuilt = 0;
+        plansFailed = 0;
+        plannedWalkYards = 0;
+        plannedRoadYards = 0;
+        teleportNoPlan = 0;
+        teleportBatchTooFar = 0;
+        teleportPortal = 0;
+        teleportSpell = 0;
+        teleportFlyingMount = 0;
+        teleportOther = 0;
+        teleportStuck = 0;
+    }
+};
+
 // A node container to aid A* calculations with nodes.
 class TravelNodeStub
 {
@@ -733,6 +806,31 @@ public:
     std::vector<G3D::Vector3> GetEdgeWalkPoints(TravelNode* from,
         TravelNode* to);
 
+    // Route between two positions over the live graph and measure the result.
+    // Passing a bot applies its speed, gold and taxi knowledge; nullptr routes
+    // on foot only, which is the case road data is about.
+    RoadRouteStats MeasureRoute(WorldPosition from, WorldPosition to, Player* bot = nullptr);
+
+    // Per-node breakdown of one route, one line per leg.
+    std::vector<std::string> DescribeRoute(WorldPosition from, WorldPosition to, Player* bot = nullptr);
+
+    // The node a row id was loaded as, or nullptr.
+    TravelNode* GetNodeByDbId(uint32 dbId) const;
+
+    // Walk every gap connector in playerbots_travelnode_connector with the real
+    // PathGenerator and record the verdict. Gap connectors close breaks in the
+    // road paint (bridges, fords, tunnels) and are the one part of the road
+    // graph the offline pipeline could not prove walkable. With apply set, the
+    // links that fail are deleted from the graph and from the database.
+    // mapId 0xFFFFFFFF checks every map, which loads terrain for every grid a
+    // connector touches — prefer one map at a time.
+    std::vector<std::string> VerifyConnectors(uint32 mapId, bool apply);
+
+    // Soak instrumentation.
+    TravelTelemetry& Telemetry() { return telemetry; }
+    void NoteTeleportFallback(std::string const& reason);
+    std::vector<std::string> TelemetryReport() const;
+
     // True once LoadNodeStore() has seen at least one node in the road id
     // range. The off-road cost multiplier is inert without it, so a server
     // running only the legacy seed keeps stock routing.
@@ -767,6 +865,7 @@ private:
 
     std::unordered_map<uint32, std::vector<TravelNode*>> m_zoneIndex;
     std::unordered_map<uint32, std::vector<TravelNode*>> m_mapIndex;
+    std::unordered_map<uint32, TravelNode*> m_dbIdIndex;
 
     std::vector<std::pair<uint32, WorldPosition>> mapOffsets;
 
@@ -775,6 +874,8 @@ private:
     bool hasToFullGen = false;
 
     uint32 roadNodeCount = 0;
+
+    TravelTelemetry telemetry;
 };
 
 #define sTravelNodeMap TravelNodeMap::instance()

@@ -700,7 +700,10 @@ std::vector<WorldPosition> WorldPosition::getPathStepFrom(WorldPosition startPos
     if (!pathUnit)
     {
         // Create a temporary creature for PathGenerator (same entry as DebugAction "show node")
-        Map* map = sMapMgr->FindBaseMap(startPos.GetMapId());
+        // CreateBaseMap rather than FindBaseMap: offline checks (connector
+        // verification, node generation) run against continents with nobody on
+        // them, where the base map has not been instantiated yet.
+        Map* map = sMapMgr->CreateBaseMap(startPos.GetMapId());
         if (!map)
             return {};
 

@@ -96,6 +96,7 @@ bool NewRpgBaseAction::MoveFarTo(WorldPosition dest)
         // its RPG objective instead of oscillating indefinitely.
         botAI->rpgInfo.stuckTs = getMSTime();
         botAI->rpgInfo.stuckAttempts = 0;
+        sTravelNodeMap.NoteTeleportFallback("stuck");
         const AreaTableEntry* entry = sAreaTableStore.LookupEntry(bot->GetZoneId());
         std::string zone_name = PlayerbotAI::GetLocalizedAreaName(entry);
         LOG_DEBUG("playerbots","[New RPG] Teleport {} from ({},{},{},{}) to ({},{},{},{}) as it stuck when moving far - Zone: {} ({})",

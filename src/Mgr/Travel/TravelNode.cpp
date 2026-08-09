@@ -8,9 +8,11 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <iomanip>
 #include <queue>
 #include <regex>
+#include <shared_mutex>
 #include <unordered_set>
 
 #include "BudgetValues.h"
@@ -19,6 +21,7 @@
 #include "Playerbots.h"
 #include "RaceMgr.h"
 #include "ServerFacade.h"
+#include "StringFormat.h"
 #include "TransportMgr.h"
 
 // TravelNodePath(float distance = 0.1f, float extraCost = 0, TravelNodePathType pathType = TravelNodePathType::walk,
@@ -350,7 +353,6 @@ void TravelNode::removeLinkTo(TravelNode* node, bool removePaths)
             paths.erase(node);
 
         links.erase(node);
-        routes.erase(node);
     }
     else
     {
@@ -362,7 +364,7 @@ void TravelNode::removeLinkTo(TravelNode* node, bool removePaths)
         }
         links.clear();
         paths.clear();
-        routes.clear();
+        componentId = 0;
     }
 }
 
@@ -1290,20 +1292,99 @@ bool TravelNodeMap::GetFullPath(TravelPlan& plan,
         endNode = GetNearestNodeOnMap(destination);
 
     if (!startNode || !endNode || startNode == endNode)
+    {
+        ++telemetry.plansFailed;
         return false;
+    }
 
     if (!startNode->hasRouteTo(endNode))
+    {
+        ++telemetry.plansFailed;
         return false;
+    }
 
     TravelNodeRoute route = GetNodeRoute(startNode, endNode, nullptr);
     if (route.isEmpty())
+    {
+        ++telemetry.plansFailed;
         return false;
+    }
 
     std::vector<WorldPosition> pathToStart = {botPos};
     std::vector<WorldPosition> pathToEnd = {destination};
     plan.steps = route.BuildPath(pathToStart, pathToEnd, nullptr);
 
-    return !plan.steps.empty();
+    if (plan.steps.empty())
+    {
+        ++telemetry.plansFailed;
+        return false;
+    }
+
+    // Record what this plan intends to walk, so a soak can report the share of
+    // long-distance walking that follows a road without anyone watching bots.
+    ++telemetry.plansBuilt;
+    std::vector<TravelNode*> routeNodes = route.getNodes();
+    for (size_t i = 1; i < routeNodes.size(); ++i)
+    {
+        TravelNode* prev = routeNodes[i - 1];
+        TravelNode* next = routeNodes[i];
+        if (!prev->hasPathTo(next))
+            continue;
+
+        TravelNodePath* path = prev->getPathTo(next);
+        if (path->getPathType() != TravelNodePathType::walk)
+            continue;
+
+        telemetry.plannedWalkYards += static_cast<uint64>(path->getDistance());
+        if (prev->isRoadNode() && next->isRoadNode())
+            telemetry.plannedRoadYards += static_cast<uint64>(path->getDistance());
+    }
+
+    return true;
+}
+
+void TravelNodeMap::NoteTeleportFallback(std::string const& reason)
+{
+    if (reason == "no plan")
+        ++telemetry.teleportNoPlan;
+    else if (reason == "walk batch too far")
+        ++telemetry.teleportBatchTooFar;
+    else if (reason == "portal walk-through")
+        ++telemetry.teleportPortal;
+    else if (reason == "teleport spell")
+        ++telemetry.teleportSpell;
+    else if (reason == "flying mount not implemented")
+        ++telemetry.teleportFlyingMount;
+    else if (reason == "stuck")
+        ++telemetry.teleportStuck;
+    else
+        ++telemetry.teleportOther;
+}
+
+std::vector<std::string> TravelNodeMap::TelemetryReport() const
+{
+    uint64 const walked = telemetry.plannedWalkYards;
+    uint64 const onRoad = telemetry.plannedRoadYards;
+    uint32 const built = telemetry.plansBuilt;
+    uint32 const failed = telemetry.plansFailed;
+
+    std::vector<std::string> lines;
+    lines.push_back(Acore::StringFormat("plans: {} built, {} failed ({:.0f}% success)", built, failed,
+                                        built + failed ? 100.f * built / (built + failed) : 0.f));
+    lines.push_back(Acore::StringFormat("planned walking: {} yd, of which {} yd on road ({:.0f}%)", walked, onRoad,
+                                        walked ? 100.f * onRoad / walked : 0.f));
+    lines.push_back(Acore::StringFormat(
+        "teleports: {} total - no plan {}, batch too far {}, portal {}, spell {}, flying mount {}, other {}, "
+        "stuck recovery {}",
+        telemetry.teleportTotal(), uint32(telemetry.teleportNoPlan), uint32(telemetry.teleportBatchTooFar),
+        uint32(telemetry.teleportPortal), uint32(telemetry.teleportSpell), uint32(telemetry.teleportFlyingMount),
+        uint32(telemetry.teleportOther), uint32(telemetry.teleportStuck)));
+
+    if (built)
+        lines.push_back(Acore::StringFormat("teleports per plan: {:.2f}",
+                                            static_cast<float>(telemetry.teleportTotal()) / built));
+
+    return lines;
 }
 
 bool TravelNodeMap::cropUselessNode(TravelNode* startNode)
@@ -2137,6 +2218,7 @@ void TravelNodeMap::LoadNodeStore()
     std::unordered_map<uint32, TravelNode*> saveNodes;
 
     roadNodeCount = 0;
+    m_dbIdIndex.clear();
 
     {
         if (PreparedQueryResult result =
@@ -2168,6 +2250,7 @@ void TravelNodeMap::LoadNodeStore()
                     ++roadNodeCount;
 
                 saveNodes.insert(std::make_pair(nodeId, node));
+                m_dbIdIndex[nodeId] = node;
 
             } while (result->NextRow());
 
@@ -2248,11 +2331,8 @@ void TravelNodeMap::LoadNodeStore()
 
                 TravelNodePath* path = startNode->getPathTo(endNode);
 
-                std::vector<WorldPosition> ppath = path->GetPath();
-                ppath.push_back(WorldPosition(fields[3].Get<uint32>(), fields[4].Get<float>(), fields[5].Get<float>(),
-                                              fields[6].Get<float>()));
-
-                path->setPath(ppath);
+                path->addPathPoint(WorldPosition(fields[3].Get<uint32>(), fields[4].Get<float>(),
+                                                 fields[5].Get<float>(), fields[6].Get<float>()));
 
                 if (path->getCalculated())
                     path->setComplete(true);
@@ -2548,6 +2628,215 @@ TravelNode* TravelNodeMap::GetNearestNodeOnMap(WorldPosition pos)
     }
 
     return bestNode;
+}
+
+RoadRouteStats TravelNodeMap::MeasureRoute(WorldPosition from, WorldPosition to, Player* bot)
+{
+    RoadRouteStats stats;
+
+    TravelNode* start = GetNearestNodeOnMap(from);
+    TravelNode* goal = GetNearestNodeOnMap(to);
+    if (!start || !goal || start == goal)
+    {
+        stats.snapFailed = true;
+        return stats;
+    }
+
+    std::shared_lock<std::shared_timed_mutex> lock(m_nMapMtx);
+
+    auto const began = std::chrono::steady_clock::now();
+    TravelNodeRoute route = GetNodeRoute(start, goal, bot);
+    stats.buildMicros = static_cast<uint32>(
+        std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - began).count());
+
+    std::vector<TravelNode*> nodeList = route.getNodes();
+    if (nodeList.size() < 2)
+        return stats;
+
+    stats.routed = true;
+    stats.nodeCount = nodeList.size();
+
+    for (size_t i = 1; i < nodeList.size(); ++i)
+    {
+        TravelNode* prev = nodeList[i - 1];
+        TravelNode* next = nodeList[i];
+        if (!prev->hasPathTo(next))
+            continue;
+
+        TravelNodePath* path = prev->getPathTo(next);
+        stats.cost += path->getCost(bot);
+
+        if (path->getPathType() != TravelNodePathType::walk)
+        {
+            stats.rideYards += prev->getDistance(next);
+            ++stats.rideLegs;
+            continue;
+        }
+
+        stats.walkYards += path->getDistance();
+        // A leg only counts as road when both ends sit on the extracted graph.
+        // On/off ramps run between a legacy POI and a road junction, so they
+        // are walking that reaches the road rather than walking on it.
+        if (prev->isRoadNode() && next->isRoadNode())
+            stats.roadYards += path->getDistance();
+    }
+
+    return stats;
+}
+
+std::vector<std::string> TravelNodeMap::DescribeRoute(WorldPosition from, WorldPosition to, Player* bot)
+{
+    std::vector<std::string> lines;
+
+    TravelNode* start = GetNearestNodeOnMap(from);
+    TravelNode* goal = GetNearestNodeOnMap(to);
+    if (!start || !goal)
+    {
+        lines.push_back("No travel node near the start or the destination on this map.");
+        return lines;
+    }
+
+    std::shared_lock<std::shared_timed_mutex> lock(m_nMapMtx);
+
+    TravelNodeRoute route = GetNodeRoute(start, goal, bot);
+    std::vector<TravelNode*> nodeList = route.getNodes();
+    if (nodeList.size() < 2)
+    {
+        lines.push_back(Acore::StringFormat("No route from '{}' to '{}'.", start->getName(), goal->getName()));
+        return lines;
+    }
+
+    lines.push_back(Acore::StringFormat("{} legs, snapped {:.0f} yd from start and {:.0f} yd from destination.",
+                                        nodeList.size() - 1, start->fDist(from), goal->fDist(to)));
+
+    for (size_t i = 1; i < nodeList.size(); ++i)
+    {
+        TravelNode* prev = nodeList[i - 1];
+        TravelNode* next = nodeList[i];
+        if (!prev->hasPathTo(next))
+            continue;
+
+        TravelNodePath* path = prev->getPathTo(next);
+        bool const walk = path->getPathType() == TravelNodePathType::walk;
+        bool const onRoad = walk && prev->isRoadNode() && next->isRoadNode();
+        lines.push_back(Acore::StringFormat("{:>3}. {} {} -> {} : {:.0f} yd, {} pts, {:.0f}s", i,
+                                            onRoad ? "[road]" : (walk ? "[    ]" : "[ride]"), prev->getName(),
+                                            next->getName(), path->getDistance(), path->GetPath().size(),
+                                            path->getCost(bot)));
+    }
+
+    return lines;
+}
+
+TravelNode* TravelNodeMap::GetNodeByDbId(uint32 dbId) const
+{
+    auto it = m_dbIdIndex.find(dbId);
+    return it == m_dbIdIndex.end() ? nullptr : it->second;
+}
+
+std::vector<std::string> TravelNodeMap::VerifyConnectors(uint32 mapId, bool apply)
+{
+    std::vector<std::string> report;
+
+    QueryResult result =
+        mapId == 0xFFFFFFFF
+            ? PlayerbotsDatabase.Query("SELECT node_id, to_node_id, map_id, length, reason FROM "
+                                       "playerbots_travelnode_connector ORDER BY map_id, node_id")
+            : PlayerbotsDatabase.Query("SELECT node_id, to_node_id, map_id, length, reason FROM "
+                                       "playerbots_travelnode_connector WHERE map_id = {} ORDER BY node_id",
+                                       mapId);
+    if (!result)
+    {
+        report.push_back("No connector rows. Load pipeline/out/sql/road_connectors.sql first.");
+        return report;
+    }
+
+    uint32 checked = 0;
+    uint32 walkable = 0;
+    uint32 missing = 0;
+    std::vector<std::pair<uint32, uint32>> failed;
+
+    do
+    {
+        Field* fields = result->Fetch();
+        uint32 const aId = fields[0].Get<uint32>();
+        uint32 const bId = fields[1].Get<uint32>();
+        uint32 const connMap = fields[2].Get<uint32>();
+        float const length = fields[3].Get<float>();
+        std::string const reason = fields[4].Get<std::string>();
+
+        TravelNode* a = GetNodeByDbId(aId);
+        TravelNode* b = GetNodeByDbId(bId);
+        if (!a || !b)
+        {
+            ++missing;
+            continue;
+        }
+
+        ++checked;
+
+        // canPathTo chains 296 yd PathGenerator legs, so a connector longer
+        // than one query still resolves. A connector that cannot be walked is
+        // paint the extractor joined across something the navmesh does not
+        // cover — the graph is claiming a bridge that is not there.
+        WorldPosition from = *a->getPosition();
+        bool const ok = from.canPathTo(*b->getPosition(), nullptr);
+
+        PlayerbotsDatabase.Execute("UPDATE playerbots_travelnode_connector SET verified = {} WHERE node_id = {} AND "
+                                   "to_node_id = {}",
+                                   ok ? 1 : 2, aId, bId);
+
+        if (ok)
+        {
+            ++walkable;
+            continue;
+        }
+
+        failed.emplace_back(aId, bId);
+        report.push_back(Acore::StringFormat("map {} {} -> {} ({:.0f} yd, {}) NOT WALKABLE: {} -> {}", connMap, aId,
+                                             bId, length, reason, a->getName(), b->getName()));
+    } while (result->NextRow());
+
+    report.push_back(Acore::StringFormat("{} connectors checked, {} walkable, {} unwalkable, {} skipped (node not "
+                                         "loaded).",
+                                         checked, walkable, failed.size(), missing));
+
+    if (!apply)
+    {
+        if (!failed.empty())
+            report.push_back("Report only. Re-run with 'apply' to delete the unwalkable links.");
+        return report;
+    }
+
+    // Deleting a connector can strand whatever the road graph reached only
+    // through it, so re-index reachability afterwards rather than leaving the
+    // component ids describing a graph that no longer exists.
+    for (auto const& failedLink : failed)
+    {
+        uint32 const ids[2][2] = {{failedLink.first, failedLink.second}, {failedLink.second, failedLink.first}};
+        for (auto const& dir : ids)
+        {
+            PlayerbotsDatabase.Execute(
+                "DELETE FROM playerbots_travelnode_link WHERE node_id = {} AND to_node_id = {}", dir[0], dir[1]);
+            PlayerbotsDatabase.Execute(
+                "DELETE FROM playerbots_travelnode_path WHERE node_id = {} AND to_node_id = {}", dir[0], dir[1]);
+
+            TravelNode* src = GetNodeByDbId(dir[0]);
+            TravelNode* dst = GetNodeByDbId(dir[1]);
+            if (src && dst)
+                src->removeLinkTo(dst, true);
+        }
+    }
+
+    if (!failed.empty())
+    {
+        std::lock_guard<std::shared_timed_mutex> lock(m_nMapMtx);
+        PrecomputeReachability();
+    }
+
+    report.push_back(Acore::StringFormat("Deleted {} unwalkable connectors and re-indexed reachability.",
+                                         failed.size()));
+    return report;
 }
 
 void TravelNodeMap::PrecomputeReachability()
