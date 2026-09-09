@@ -17,9 +17,11 @@
 #include "Playerbots.h"
 #include <cmath>
 #include <ctime>
+#include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
+#include <system_error>
 
 namespace
 {
@@ -400,14 +402,16 @@ void PerfMonitor::DumpJson(bool perTick)
             uint64 typeMinTime = 0;
             uint64 typeMaxTime = 0;
             uint64 typeCount = 0;
+            bool firstSample = true;
             for (Sample const& row : metric.second)
             {
                 typeTotalTime += row.totalTime;
                 typeCount += row.count;
-                if (!typeMinTime || (row.minTime && typeMinTime > row.minTime))
+                if (firstSample || typeMinTime > row.minTime)
                     typeMinTime = row.minTime;
                 if (typeMaxTime < row.maxTime)
                     typeMaxTime = row.maxTime;
+                firstSample = false;
             }
 
             out << "      \"totalTime\": " << typeTotalTime << ",\n";
@@ -453,15 +457,37 @@ void PerfMonitor::DumpJson(bool perTick)
     out << "}\n";
 
     std::string const path = JsonPath(perTick);
-    std::ofstream file(path.c_str(), std::ios::out | std::ios::trunc);
+    std::string const tempPath = path + ".tmp";
+
+    std::ofstream file(tempPath.c_str(), std::ios::out | std::ios::trunc);
     if (!file)
     {
-        LOG_ERROR("playerbots", "Performance monitor could not write {}", path);
+        LOG_ERROR("playerbots", "Performance monitor could not write {}", tempPath);
         return;
     }
 
     file << out.str();
     file.close();
+
+    if (!file)
+    {
+        LOG_ERROR("playerbots", "Performance monitor failed to write {}", tempPath);
+
+        std::error_code removeError;
+        std::filesystem::remove(tempPath, removeError);
+        return;
+    }
+
+    std::error_code renameError;
+    std::filesystem::rename(tempPath, path, renameError);
+    if (renameError)
+    {
+        LOG_ERROR("playerbots", "Performance monitor could not replace {}: {}", path, renameError.message());
+
+        std::error_code removeError;
+        std::filesystem::remove(tempPath, removeError);
+        return;
+    }
 
     LOG_INFO("playerbots", "Performance monitor dump written to {}", path);
 }
